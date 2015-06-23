@@ -203,6 +203,7 @@ def main(argv, wayout):
 	parser.add_argument('-b','--blast', help="optional tabular blast for direction evidence")
 	parser.add_argument('-l','--map-length', type=int, default=100, help="minimum mapping length in bases [100]")
 	parser.add_argument('-i','--intron-distance', type=int, default=1000, help="max distance for introns [1000]")
+	parser.add_argument('-m','--max-length', type=int, default=20000, help="max length allowed for transcripts [20000]")
 	parser.add_argument('-r','--read-limit', type=int, default=10, help="max allowed reads per EST group [10]")
 	parser.add_argument('-n','--number-split', default=".", help="delimited for EST numbers [.]")
 	parser.add_argument('-p','--program', help="program for 2nd column in output [EST]", default="EST")
@@ -399,6 +400,12 @@ def main(argv, wayout):
 					matchingexons.extend(betweenmatches)
 
 			if matchingexons:
+				# before adding to counts, do sanity check on transcript
+				translength = max(me[2][1] for me in matchingexons) - min(me[2][0] for me in matchingexons) + 1
+				if translength > args.max_length:
+					print >> sys.stderr, "WARNING EST {} on {} is too long: {} with {} exons".format(est, sc, translength, len(matchingexons) )
+					continue # should skip to next est
+
 				transcriptcount += 1
 				matchcount += len(matchingexons)
 				# forces '+' if there is no gene model
