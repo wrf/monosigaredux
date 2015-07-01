@@ -9,7 +9,7 @@
 # http://www.sequenceontology.org/gff3.shtml
 
 '''
-GROUPESTEXONS.PY v1 2015-06-19
+GROUPESTEXONS.PY v1 2015-07-01
 
   ## GENERAL PRINCIPLES
   assume EST information is always right, or more right than de novo genes
@@ -140,36 +140,72 @@ def find_matching_exons(exbyreaddict, read, refgenedict, verbose, doreverse):
 	'''for each EST exon find any matching gene exons'''
 	# each kept exon is in format of (exon to call line, new attribute ID, possible new coords)
 	keptexons = []
-	# establish order of first, last exons
-	order = (0,len(exbyreaddict[read])-1)
-	if doreverse:
-		order = tuple(reversed(order))
+	lastexon = len(exbyreaddict[read])-1
+	# check if any exons are in this direction
+	if exbyreaddict[read]:
+		readmin = min(e[0] for e in exbyreaddict[read])-100
+		readmax = max(e[1] for e in exbyreaddict[read])+100
+	else: # otherwise return the empty list
+		return keptexons
+	# then check if exons are in range
+	withinrange = False
+	for exon in refgenedict:
+		# check if there are exons before the end of the read or after the beginning 
+		# or if the read is within an exon
+		if readmax >= exon[0] >= readmin or readmax >= exon[1] >= readmin or (readmin >= exon[0] and readmax <= exon[1]):
+			withinrange=True
+	novelexons = 0
+	if verbose:
+		print >> sys.stderr, "Checking read {} with exons 0,{}".format(read, lastexon)
 	# iterate through exons in sorted order of the direction of the sequence (+/-)
 	for i,exon in enumerate(sorted(exbyreaddict[read],key=lambda x: x[0], reverse=doreverse) ):
-		refex = refgenedict.get(exon, False)
-		if refex:
+		if withinrange:
+			refex = refgenedict.get(exon, False)
+			if refex: # if the exon interval is a perfect match
+				if verbose:
+					print >> sys.stderr, "Exon {} found {} {}".format(i, exon, refex)
+				keepexon = (exon, read, exon)
+				keptexons.append(keepexon)
+			else:
+				if verbose:
+					print >> sys.stderr, "No exact match for {}".format(exon)
+				#if i==order[0]: # first exon, 5prime
+				if i<lastexon:
+					if verbose:
+						print >> sys.stderr, "Using middle exon {} at {}".format(i, exon)
+					keepexon = (exon, read, exon)
+					keptexons.append(keepexon)
+				# case of only one exon where order is the same
+				elif i==lastexon: # last exon, 3prime
+					if doreverse:
+						bestmatch = get_best_part_exon(refgenedict, exon, verbose, exnum=i, pos=1, antipos=0)
+						if bestmatch:
+							keepexon = (bestmatch, read, (bestmatch[0], exon[1]) ) # reverse strand
+						else:
+							if verbose:
+								print >> sys.stderr, "Using terminal exon {} at {}".format(i, exon)
+							keepexon = (exon, read, exon)
+					else:
+						bestmatch = get_best_part_exon(refgenedict, exon, verbose, exnum=i, pos=0, antipos=1)
+						if bestmatch:
+							keepexon = (bestmatch, read, (exon[0], bestmatch[1]) ) # forward strand
+						else:
+							if verbose:
+								print >> sys.stderr, "Using terminal exon {} at {}".format(i, exon)
+							keepexon = (exon, read, exon)
+					if verbose:
+						print >> sys.stderr, keepexon
+					keptexons.append(keepexon)
+		else:
+			# for case where no exons are within the boundaries of the read
+			# suggesting a novel transcript
 			if verbose:
-				print >> sys.stderr, "Exon {} found {} {}".format(i, exon, refex)
+				print >> sys.stderr, "No exons within range, keeping {}".format(exon)
 			keepexon = (exon, read, exon)
 			keptexons.append(keepexon)
-		else:
-			### TODO add case for good EST but no de novo model
-			if verbose:
-				print >> sys.stderr, "No exact match for {}".format(exon)
-			if i==order[0]: # first exon, 5prime
-				bestmatch = get_best_part_exon(refgenedict, exon, verbose, exnum=i, pos=1, antipos=0)
-				if bestmatch:
-					keepexon = (bestmatch, read, exon) # take positions from EST
-					keptexons.append(keepexon)
-			# not elif for case of only one exon
-			if i==order[1]: # last exon, 3prime
-				bestmatch = get_best_part_exon(refgenedict, exon, verbose, exnum=i, pos=0, antipos=1)
-				if bestmatch:
-					if doreverse:
-						keepexon = (bestmatch, read, (bestmatch[0], exon[1]) ) # reverse strand
-					else:
-						keepexon = (bestmatch, read, (exon[0], bestmatch[1]) ) # forward strand
-					keptexons.append(keepexon)
+			novelexons += 1
+	if verbose and novelexons==len(exbyreaddict[read]):
+		print >> sys.stderr, "NOVEL transcript for {}".format(read)
 	return keptexons
 
 def print_updated_gff(matchingexons, ref_lines, scaffold, transstrand, program):
@@ -179,12 +215,15 @@ def print_updated_gff(matchingexons, ref_lines, scaffold, transstrand, program):
 	transattrs = 'gene_id "{0}"; transcript_id "{0}.1";'.format(matchingexons[0][1])
 	translist = [scaffold, program, "transcript", transstart, transend, "100", transstrand, ".", transattrs]
 	print >> sys.stdout, "\t".join(translist)
+	# need dummy line in case 
+	dummylist = "\t".join([scaffold, "", "exon", "", "", ".", transstrand, ".", ""])
 	exoncount = 0
 	# me is a tuple of matching ref exon, read for updating attributes, and possible new positions
 	# set is used to remove duplicate exons from forward and reverse
-	for me in sorted(set(matchingexons), key=lambda x: x[2][0]):
+	#for me in sorted(set(matchingexons), key=lambda x: x[2][0]):
+	for me in matchingexons: # should be presorted
 		exoncount += 1
-		outsplits = ref_lines[me[0]].split("\t")
+		outsplits = ref_lines.get(me[0],dummylist).split("\t")
 		outsplits[1] = program
 		outsplits[3] = str(me[2][0]) # from tuple like (1160, 1498) should be 1160
 		outsplits[4] = str(me[2][1]) # and 1498
@@ -193,20 +232,47 @@ def print_updated_gff(matchingexons, ref_lines, scaffold, transstrand, program):
 		outline = "\t".join(outsplits)
 		print >> sys.stdout, outline
 
+def get_fasta_dict(fastafile):
+	seqdict = defaultdict(str)
+	for line in open(fastafile, 'r'):
+		line = line.rstrip()
+		if line[0] == ">":
+			seqid = line[1:]
+		else:
+			seqdict[seqid] += line
+	return seqdict
+
+def find_polya(seqstring, polyalen):
+	seqtail = seqstring[-polyalen:]
+	return float(seqtail.count("A"))/polyalen >= 0.8
+
+def get_est_directions(fastafile, polyalen):
+	directdict = {}
+	seqdict = get_fasta_dict(fastafile)
+	for k,v in seqdict.iteritems():
+		if find_polya(v, polyalen):
+			directdict[k] = True
+	return directdict
+
 def main(argv, wayout):
 	if not len(argv):
 		argv.append("-h")
 
 	parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, description=__doc__)
 	parser.add_argument('-e','--ests', help="EST gmap results file")
+	parser.add_argument('-f','--fasta', help="optional fasta file of raw ESTs for polyA detection")
 	parser.add_argument('-g','--genes', help="gene models that will be clustered or corrected")
 	parser.add_argument('-b','--blast', help="optional tabular blast for direction evidence")
+	parser.add_argument('-a','--poly-a', type=int, default=25, help="terminal bases to check for polyA [25]")
 	parser.add_argument('-l','--map-length', type=int, default=100, help="minimum mapping length in bases [100]")
 	parser.add_argument('-i','--intron-distance', type=int, default=1000, help="max distance for introns [1000]")
 	parser.add_argument('-m','--max-length', type=int, default=20000, help="max length allowed for transcripts [20000]")
 	parser.add_argument('-r','--read-limit', type=int, default=10, help="max allowed reads per EST group [10]")
 	parser.add_argument('-n','--number-split', default=".", help="delimited for EST numbers [.]")
 	parser.add_argument('-p','--program', help="program for 2nd column in output [EST]", default="EST")
+	parser.add_argument('-o','--overlap', help="keep overlapping exons", action="store_false")
+	parser.add_argument('-E','--extract', help="filter by a specific EST for debugging")
+	parser.add_argument('-S','--select', help="filter by a specific scaffold for debugging")
 	parser.add_argument('-v','--verbose', help="verbose output", action="store_true")
 	args = parser.parse_args(argv)
 
@@ -263,6 +329,14 @@ def main(argv, wayout):
 			hittuple = (iqstart, iqend, isstart, isend)
 			# must use setdefault since get(qseqid, []) returns None, and cannot append
 			blasthitdict[sseqid].setdefault(qseqid, []).append(hittuple)
+
+	# OPTIONAL
+	#
+	if args.fasta:
+		fastaestcount = 0
+		print >> sys.stderr, "Searching ESTs for poly-A tails in {}".format(args.fasta), time.asctime()
+		directiondict = get_est_directions(args.fasta, args.poly_a)
+		print >> sys.stderr, "Found direction for {} ESTs".format(len(directiondict) ), time.asctime()
 
 	# PART II
 	#
@@ -331,37 +405,26 @@ def main(argv, wayout):
 			pairscount+=1
 	print >> sys.stderr, "Counted %d ESTs with aligned pairs" % (pairscount), time.asctime()
 
-	#print >> sys.stderr, "Merging ESTs", time.asctime()
-	#exon_nums_to_set(est_exons)
-	#merged_exons = make_exon_ranges(est_exons)
-	#print >> sys.stderr, merged_exons
-	#print >> sys.stderr, "Extending ranges of ESTs", time.asctime()
-
 	matchcount = 0
 	transcriptcount = 0
 	print >> sys.stderr, "Finding predicted exons that match ESTs", time.asctime()
 	for sc,ebr in exonsbyscaffold.iteritems(): # scaffold, dicts of exons by read
-		#extendedranges = {}
-		#readsbyexon = defaultdict(set)
-		#exbyread = defaultdict(list)
-		#for read, exs in ebr.iteritems(): # read, exons
-		#	for ex in exs:
-		#		for me in merged_exons[sc]:
-		#			if within_exon_range(ex[0], *me) or within_exon_range(ex[1], *me):
-		#				readsbyexon[me].add(read)
-		#				exbyread[read].append(me)
+		if args.select: # added for debugging of scaffolds
+			if not sc==args.select:
+				continue
 
 		readgroups = defaultdict(list) # should be list by final transcript boundaries
-		readonscaffold = ebr.keys()
-		estonscaffold = list(set(estbyread[r] for r in readonscaffold))
+		readonscaffold = ebr.keys() # take all reads for that scaffold
+		estonscaffold = list(set(estbyread[r] for r in readonscaffold)) # take all ESTs for reads on that scaffold
 		for est in estonscaffold:
 			forwardmatches = []
 			reversematches = []
 			matchingexons = []
 			if args.verbose:
 				print >> sys.stderr, "Sorting {} on scaffold {}".format(est, sc)
-		#	if not est=="3711282":
-		#		continue
+			if args.extract: # added for debugging specific ESTs
+				if not est==args.extract:
+					continue
 			readsperest = list(set(estparts[est]))
 			if len(readsperest) > args.read_limit:
 				print >> sys.stderr, "WARNING counted {} reads from {}, skipping".format(len(readsperest), est)
@@ -394,26 +457,57 @@ def main(argv, wayout):
 						if exon[0]>forward_end and exon[1]<reverse_end:
 							### TODO also check against intron distance
 							if args.verbose:
-								print >> sys.stderr, "Internal exon found {}".format(exon)
+								print >> sys.stderr, "De novo internal exon found {}".format(exon)
 							midmatch = (exon, est, exon)
 							betweenmatches.append(midmatch)
 					matchingexons.extend(betweenmatches)
 
 			if matchingexons:
+				sortedmatches = sorted(set(matchingexons), key=lambda x: x[2][0])
+				# remove exons that span introns of other exons
+				if args.overlap:
+					poplist = []
+					for i,mep in enumerate(zip(sortedmatches, sortedmatches[1:] ) ):
+					#	if mep[0][2][1] >= mep[1][2][0]:
+						if mep[0][2][1] >= mep[1][2][1]: # if end of one match is after end of another match
+							poplist.append(i)
+					for pi in reversed(poplist):
+						if args.verbose:
+							print >> sys.stderr, "Removing overlapping exon {} for {}".format(pi, est)
+						sortedmatches.pop(pi)
+
 				# before adding to counts, do sanity check on transcript
-				translength = max(me[2][1] for me in matchingexons) - min(me[2][0] for me in matchingexons) + 1
+				translength = max(me[2][1] for me in sortedmatches) - min(me[2][0] for me in sortedmatches) + 1
 				if translength > args.max_length:
 					print >> sys.stderr, "WARNING EST {} on {} is too long: {} with {} exons".format(est, sc, translength, len(matchingexons) )
 					continue # should skip to next est
 
 				transcriptcount += 1
-				matchcount += len(matchingexons)
-				# forces '+' if there is no gene model
-				### TODO incorporate evidence from blast here
-				transstrand = get_strand_consensus([gene_ref_exons[sc].get(x[0],1) for x in matchingexons ], (est,sc) )
-				print_updated_gff(matchingexons, gene_ref_lines[sc], sc, transstrand, args.program)
+				matchcount += len(sortedmatches)
+
+				# determine transcript direction, using poly-A, BLAST or de novo exons
+				if args.fasta and directiondict:
+					for read in readsperest:
+						if directiondict.get(read,False) and forwardreads.get(read,False):
+							transstrand = "+"
+							if args.verbose:
+								print >> sys.stderr, "Using poly-A information for {} strand".format(transstrand)
+							break
+						elif directiondict.get(read,False) and reversereads.get(read,False):
+							transstrand = "-"
+							if args.verbose:
+								print >> sys.stderr, "Using poly-A information for {} strand".format(transstrand)
+							break
+					else:
+						transstrand = get_strand_consensus([gene_ref_exons[sc].get(x[0],1) for x in sortedmatches ], (est,sc) )
+				else:
+					# forces '+' if there is no gene model
+					### TODO incorporate evidence from blast here
+					transstrand = get_strand_consensus([gene_ref_exons[sc].get(x[0],1) for x in sortedmatches ], (est,sc) )
+				print_updated_gff(sortedmatches, gene_ref_lines[sc], sc, transstrand, args.program)
 	print >> sys.stderr, "Counted %d matching exons or partial exons" % (matchcount), time.asctime()
 	print >> sys.stderr, "Printed %d transcripts" % (transcriptcount), time.asctime()
+	print >> sys.stderr, "# Processed completed in %.1f minutes" % ((time.time()-starttime)/60)
 
 if __name__ == "__main__":
 	main(sys.argv[1:],sys.stdout)
