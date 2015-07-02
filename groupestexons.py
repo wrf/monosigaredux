@@ -267,7 +267,7 @@ def main(argv, wayout):
 	parser.add_argument('-b','--blast', help="optional tabular blast for direction evidence")
 	parser.add_argument('-a','--poly-a', type=int, default=25, help="terminal bases to check for polyA [25]")
 	parser.add_argument('-l','--map-length', type=int, default=100, help="minimum mapping length in bases [100]")
-	parser.add_argument('-i','--intron-distance', type=int, default=1000, help="max distance for introns [1000]")
+	parser.add_argument('-i','--intron-distance', type=int, default=5000, help="max distance for introns [5000]")
 	parser.add_argument('-G','--gene-length', type=int, default=50000, help="max length allowed for genes [50000]")
 	parser.add_argument('-T','--trans-length', type=int, default=20000, help="max length allowed for transcripts [20000]")
 	parser.add_argument('-r','--read-limit', type=int, default=10, help="max allowed reads per EST group [10]")
@@ -357,14 +357,14 @@ def main(argv, wayout):
 	#est_exons = defaultdict(list)
 	estexoncount = 0
 	readlengths = defaultdict(int) # sum of exons by readname
-	estparts = defaultdict(list) # list of two possible readnames for each estname
+	estreadsbyscaffold = defaultdict( lambda: defaultdict(list) ) # list of all possible readnames for each estname
 	exonsbyscaffold = defaultdict( lambda: defaultdict(list) ) # by scaffold then readname
 	estbyread = {}
 	forwardreads = defaultdict(list)
 	reversereads = defaultdict(list)
 	#scafreadcount = defaultdict( lambda: defaultdict(int) )
 
-	readidre = "Name=([\w\d\.|:]+);" # must have . | and : for different EST types
+	readidre = "ID=([\w\d.|:]+);" # must have . | and : for different EST types
 	print >> sys.stderr, "Reading EST sequences from %s" % (args.ests), time.asctime()
 	for line in open(args.ests, 'r'):
 		estexoncount += 1
@@ -375,12 +375,15 @@ def main(argv, wayout):
 			# from ID=XYM14183.y1.path1;Name=XYM14183.y1;Target=XYM14183.y1 88 130;Gap=M43
 			# or ID=jgi|JGI_XYM10825.rev|.path1;Name=jgi|JGI_XYM10825.rev|;Target=jgi|JGI_XYM10825.rev|
 			# or ID=3720288:1.path1;Name=3720288:1;Target=3720288:1 12 684;Gap=M673
-			readname = re.search(readidre,attrs).group(1) # should be XYM14183.y1
+			readid = re.search(readidre,attrs).group(1) # should be XYM14183.y1.path1
+			readname, readpath = readid.rsplit(".",1) # should be XYM14183.y1 and path1
 			estname = readname.split(args.number_split)[0] # should be XYM14183
 
-			### TODO parse this better to allow for multiple paths as different genes
+			if not readpath=="path1": # this takes only the first path
+				continue
+
 			estbyread[readname] = estname
-			estparts[estname].append(readname)
+			estreadsbyscaffold[scaffold][estname].append(readname)
 			scaffold = lsplits[0]
 			strand = lsplits[6]
 			exonbound = ( int(lsplits[3]),int(lsplits[4]) )
@@ -397,16 +400,8 @@ def main(argv, wayout):
 	print >> sys.stderr, "Counted %d ESTs with %d bases" % (len(readlengths), sum(readlengths.values()) ), time.asctime()
 	print >> sys.stderr, "Counted %d putative exons" % (estexoncount), time.asctime()
 
-	forwardbounds = get_read_bounds(forwardreads, fnc=min, ind=0)
-	reversebounds = get_read_bounds(reversereads, fnc=max, ind=1)
-
-	# if any exons are present from one read in another, take the exons and pop the read
-
-	pairscount = 0
-	for k,v in estparts.iteritems():
-		if all(bool(r) for r in v):
-			pairscount+=1
-	print >> sys.stderr, "Counted %d ESTs with aligned pairs" % (pairscount), time.asctime()
+	#forwardbounds = get_read_bounds(forwardreads, fnc=min, ind=0)
+	#reversebounds = get_read_bounds(reversereads, fnc=max, ind=1)
 
 	matchcount = 0
 	transcriptcount = 0
@@ -428,7 +423,7 @@ def main(argv, wayout):
 			if args.extract: # added for debugging specific ESTs
 				if not est==args.extract:
 					continue
-			readsperest = list(set(estparts[est]))
+			readsperest = list(set(estreadsbyscaffold[sc][est]))
 			if len(readsperest) > args.read_limit:
 				print >> sys.stderr, "WARNING counted {} reads from {}, skipping".format(len(readsperest), est)
 				continue
