@@ -101,13 +101,14 @@ def within_exon_range(targetexon, lower, upper):
 	return lower <= targetexon <= upper
 
 def get_strand_consensus(strandlist, estscaf):
+	numexons = len(strandlist)
 	strandconsensus = float(sum(strandlist))/len(strandlist)
 	if strandconsensus > 0:
 		return "+"
 	elif strandconsensus < 0:
 		return "-"
 	else:
-		print >> sys.stderr, "WARNING EST {} on {} composed of mixed forward and reverse".format(*estscaf)
+		print >> sys.stderr, "WARNING EST {1} on {2} with {0} exons has exons in both directions".format(numexons, *estscaf)
 		return "."
 
 def get_best_part_exon(refgenedict, exon, verbose, exnum, pos, antipos):
@@ -227,6 +228,7 @@ def print_updated_gff(matchingexons, ref_lines, scaffold, transstrand, program):
 		outsplits[1] = program
 		outsplits[3] = str(me[2][0]) # from tuple like (1160, 1498) should be 1160
 		outsplits[4] = str(me[2][1]) # and 1498
+		outsplits[6] = transstrand
 		attributes = '{} exon_number "{}";'.format(transattrs, exoncount)
 		outsplits[8] = attributes
 		outline = "\t".join(outsplits)
@@ -266,7 +268,8 @@ def main(argv, wayout):
 	parser.add_argument('-a','--poly-a', type=int, default=25, help="terminal bases to check for polyA [25]")
 	parser.add_argument('-l','--map-length', type=int, default=100, help="minimum mapping length in bases [100]")
 	parser.add_argument('-i','--intron-distance', type=int, default=1000, help="max distance for introns [1000]")
-	parser.add_argument('-m','--max-length', type=int, default=20000, help="max length allowed for transcripts [20000]")
+	parser.add_argument('-G','--gene-length', type=int, default=50000, help="max length allowed for genes [50000]")
+	parser.add_argument('-T','--trans-length', type=int, default=20000, help="max length allowed for transcripts [20000]")
 	parser.add_argument('-r','--read-limit', type=int, default=10, help="max allowed reads per EST group [10]")
 	parser.add_argument('-n','--number-split', default=".", help="delimited for EST numbers [.]")
 	parser.add_argument('-p','--program', help="program for 2nd column in output [EST]", default="EST")
@@ -477,9 +480,14 @@ def main(argv, wayout):
 						sortedmatches.pop(pi)
 
 				# before adding to counts, do sanity check on transcript
-				translength = max(me[2][1] for me in sortedmatches) - min(me[2][0] for me in sortedmatches) + 1
-				if translength > args.max_length:
-					print >> sys.stderr, "WARNING EST {} on {} is too long: {} with {} exons".format(est, sc, translength, len(matchingexons) )
+				genelength = max(me[2][1] for me in sortedmatches) - min(me[2][0] for me in sortedmatches) + 1
+				if genelength > args.gene_length:
+					print >> sys.stderr, "WARNING GENE {} on {} is too long: {} with {} exons".format(est, sc, genelength, len(sortedmatches) )
+					continue # should skip to next est
+				# before adding to counts, do sanity check on transcript
+				translength = sum(me[2][1]-me[2][0] for me in sortedmatches)
+				if translength > args.trans_length:
+					print >> sys.stderr, "WARNING EST {} on {} is too long: {} with {} exons".format(est, sc, translength, len(sortedmatches) )
 					continue # should skip to next est
 
 				transcriptcount += 1
@@ -491,12 +499,12 @@ def main(argv, wayout):
 						if directiondict.get(read,False) and forwardreads.get(read,False):
 							transstrand = "+"
 							if args.verbose:
-								print >> sys.stderr, "Using poly-A information for {} strand".format(transstrand)
+								print >> sys.stderr, "Found poly-A for {} strand on {}".format(transstrand, est)
 							break
 						elif directiondict.get(read,False) and reversereads.get(read,False):
 							transstrand = "-"
 							if args.verbose:
-								print >> sys.stderr, "Using poly-A information for {} strand".format(transstrand)
+								print >> sys.stderr, "Found poly-A for {} strand on {}".format(transstrand, est)
 							break
 					else:
 						transstrand = get_strand_consensus([gene_ref_exons[sc].get(x[0],1) for x in sortedmatches ], (est,sc) )
