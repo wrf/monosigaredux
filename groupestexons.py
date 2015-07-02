@@ -367,7 +367,6 @@ def main(argv, wayout):
 	readidre = "ID=([\w\d.|:]+);" # must have . | and : for different EST types
 	print >> sys.stderr, "Reading EST sequences from %s" % (args.ests), time.asctime()
 	for line in open(args.ests, 'r'):
-		estexoncount += 1
 		line = line.rstrip()
 		if line and not line[0]=="#":
 			lsplits = line.split("\t")
@@ -381,13 +380,15 @@ def main(argv, wayout):
 
 			if not readpath=="path1": # this takes only the first path
 				continue
+			if args.extract: # added for debugging specific ESTs
+				if not estname==args.extract:
+					continue
 
+ 			scaffold = lsplits[0]
+			strand = lsplits[6]
 			estbyread[readname] = estname
 			estreadsbyscaffold[scaffold][estname].append(readname)
-			scaffold = lsplits[0]
-			strand = lsplits[6]
 			exonbound = ( int(lsplits[3]),int(lsplits[4]) )
-
 			exonsbyscaffold[scaffold][readname].append(exonbound)
 			#est_exons[scaffold].extend(range(*exonbound) ) # ests are treated strand-non-specific
 			readlengths[readname] += exonbound[1]-exonbound[0]+1
@@ -396,6 +397,7 @@ def main(argv, wayout):
 				forwardreads[readname].append(exonbound)
 			else: # assume '-' strand
 				reversereads[readname].append(exonbound)
+			estexoncount += 1
 	print >> sys.stderr, "Counted %d forward and %d reverse reads" % (len(forwardreads), len(reversereads) ), time.asctime()
 	print >> sys.stderr, "Counted %d ESTs with %d bases" % (len(readlengths), sum(readlengths.values()) ), time.asctime()
 	print >> sys.stderr, "Counted %d putative exons" % (estexoncount), time.asctime()
